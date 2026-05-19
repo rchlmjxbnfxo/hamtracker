@@ -5,33 +5,46 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Mom's Health Tracker 🩺</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🩺</text></svg>"/>
-  <!-- React + ReactDOM -->
-  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <!-- Recharts -->
-  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
-  <!-- Babel for JSX -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #eef4fb; }
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #c5d8ea; border-radius: 3px; }
-    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-    @keyframes loadbar { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
-    .spin { animation: spin 1.5s linear infinite; display: inline-block; }
-    .loading-bar { width: 200px; height: 4px; background: #d5e9f7; border-radius: 2px; overflow: hidden; margin: 0 auto; }
-    .loading-fill { height: 100%; width: 60px; background: #2672b8; border-radius: 2px; animation: loadbar 1.2s ease-in-out infinite; }
-    button:hover { opacity: 0.85; } button:active { opacity: 0.75; }
-    textarea, select, input { font-family: 'Nunito', sans-serif; }
-    a { color: inherit; }
-  </style>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{background:#eef4fb;font-family:'Nunito',sans-serif}
+    ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#c5d8ea;border-radius:3px}
+    @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+    @keyframes loadbar{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}
+    .spin{animation:spin 1.5s linear infinite;display:inline-block}
+    .loading-bar{width:200px;height:4px;background:#d5e9f7;border-radius:2px;overflow:hidden;margin:0 auto}
+    .loading-fill{height:100%;width:60px;background:#2672b8;border-radius:2px;animation:loadbar 1.2s ease-in-out infinite}
+    button:hover{opacity:.85}button:active{opacity:.75}
+    textarea,select,input{font-family:'Nunito',sans-serif}
+    #error-banner{display:none;position:fixed;top:0;left:0;right:0;background:#dc4545;color:#fff;padding:12px 20px;font-size:13px;z-index:99999;font-family:monospace}
+  </style>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="text/babel" data-presets="react">
+  <div id="error-banner"></div>
+  <div id="root"><div style="display:flex;height:100vh;align-items:center;justify-content:center;font-family:Nunito,sans-serif;background:#eef4fb"><div style="text-align:center"><div style="font-size:40px">🩺</div><div style="font-weight:800;font-size:16px;margin-top:12px">Loading…</div></div></div></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.1.16/Recharts.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+  <script>
+    // Global error handler - show errors on screen instead of silent blank page
+    window.onerror = function(msg, src, line, col, err) {
+      var b = document.getElementById('error-banner');
+      b.style.display = 'block';
+      b.textContent = 'Error: ' + msg + ' (line ' + line + ')';
+      console.error(err);
+    };
+    window.addEventListener('unhandledrejection', function(e) {
+      var b = document.getElementById('error-banner');
+      b.style.display = 'block';
+      b.textContent = 'Promise error: ' + (e.reason && e.reason.message ? e.reason.message : e.reason);
+    });
+  </script>
+
+  <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useCallback } = React;
     const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } = Recharts;
 
@@ -1159,7 +1172,8 @@ function App() {
 }
 
 
-    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
   </script>
 </body>
 </html>
