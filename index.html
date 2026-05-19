@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mom's Health Tracker 🩺</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🩺</text></svg>"/>
+  <!-- React + ReactDOM -->
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <!-- Recharts -->
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+  <!-- Babel for JSX -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #eef4fb; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #c5d8ea; border-radius: 3px; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    @keyframes loadbar { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+    .spin { animation: spin 1.5s linear infinite; display: inline-block; }
+    .loading-bar { width: 200px; height: 4px; background: #d5e9f7; border-radius: 2px; overflow: hidden; margin: 0 auto; }
+    .loading-fill { height: 100%; width: 60px; background: #2672b8; border-radius: 2px; animation: loadbar 1.2s ease-in-out infinite; }
+    button:hover { opacity: 0.85; } button:active { opacity: 0.75; }
+    textarea, select, input { font-family: 'Nunito', sans-serif; }
+    a { color: inherit; }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useRef, useCallback } = React;
+    const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } = Recharts;
+
+
+// ── Storage shim: mirrors Claude artifact API using localStorage ───────────────
+const storage = {
+  get: async (key, shared = false) => {
+    const k = shared ? `shared_${key}` : `personal_${key}`;
+    const val = localStorage.getItem(k);
+    if (val === null) throw new Error("Key not found");
+    return { key, value: val, shared };
+  },
+  set: async (key, value, shared = false) => {
+    const k = shared ? `shared_${key}` : `personal_${key}`;
+    localStorage.setItem(k, value);
+    return { key, value, shared };
+  },
+  delete: async (key, shared = false) => {
+    const k = shared ? `shared_${key}` : `personal_${key}`;
+    localStorage.removeItem(k);
+    return { key, deleted: true, shared };
+  },
+  list: async (prefix = "", shared = false) => {
+    const p = shared ? `shared_${prefix}` : `personal_${prefix}`;
+    const keys = Object.keys(localStorage).filter(k => k.startsWith(p)).map(k => k.replace(/^(shared_|personal_)/, ""));
+    return { keys, prefix, shared };
+  }
+};
+if (typeof window !== "undefined") window.storage = storage;
+
+
+const CBC_MARKERS = [
+  { key: "wbc",             label: "WBC",               unit: "K/µL", low: 4.5,  high: 11.0, color: "#4183c4", group: "CBC" },
+  { key: "rbc",             label: "RBC",               unit: "M/µL", low: 4.2,  high: 5.4,  color: "#6b9e78", group: "CBC" },
+  { key: "hemoglobin",      label: "Hemoglobin",        unit: "g/dL", low: 12.0, high: 17.0, color: "#c25b5b", group: "CBC" },
+  { key: "hematocrit",      label: "Hematocrit",        unit: "%",    low: 36,   high: 50,   color: "#c87941", group: "CBC" },
+  { key: "platelets",       label: "Platelets",         unit: "K/µL", low: 150,  high: 400,  color: "#9b72c8", group: "CBC" },
+  { key: "neutrophils_abs", label: "Neutrophils",       unit: "K/µL", low: 1.8,  high: 7.7,  color: "#5b8fc2", group: "Differential" },
+  { key: "neutrophils_pct", label: "Neutrophils %",     unit: "%",    low: 50,   high: 70,   color: "#5b8fc2", group: "Differential" },
+  { key: "lymphocytes_abs", label: "Lymphocytes",       unit: "K/µL", low: 1.0,  high: 4.8,  color: "#4caf7d", group: "Differential" },
+  { key: "lymphocytes_pct", label: "Lymphocytes %",     unit: "%",    low: 20,   high: 40,   color: "#4caf7d", group: "Differential" },
+  { key: "eosinophils_abs", label: "Eosinophils (Abs)", unit: "K/µL", low: 0.1,  high: 0.5,  color: "#e07b54", group: "HES Watch", highlight: true },
+  { key: "eosinophils_pct", label: "Eosinophils %",     unit: "%",    low: 1,    high: 4,    color: "#e07b54", group: "HES Watch", highlight: true },
+  { key: "monocytes_abs",   label: "Monocytes",         unit: "K/µL", low: 0.2,  high: 1.0,  color: "#a08cb0", group: "Differential" },
+  { key: "monocytes_pct",   label: "Monocytes %",       unit: "%",    low: 2,    high: 8,    color: "#a08cb0", group: "Differential" },
+  { key: "basophils_abs",   label: "Basophils",         unit: "K/µL", low: 0,    high: 0.1,  color: "#7098b5", group: "Differential" },
+  { key: "basophils_pct",   label: "Basophils %",       unit: "%",    low: 0,    high: 1,    color: "#7098b5", group: "Differential" },
+  { key: "mcv",             label: "MCV",               unit: "fL",   low: 80,   high: 100,  color: "#8aab8a", group: "Red Cell" },
+  { key: "mch",             label: "MCH",               unit: "pg",   low: 27,   high: 33,   color: "#8aab8a", group: "Red Cell" },
+  { key: "mchc",            label: "MCHC",              unit: "g/dL", low: 32,   high: 36,   color: "#8aab8a", group: "Red Cell" },
+  { key: "rdw",             label: "RDW",               unit: "%",    low: 11.5, high: 14.5, color: "#8aab8a", group: "Red Cell" },
+];
+const MMAP = Object.fromEntries(CBC_MARKERS.map(m => [m.key, m]));
+
+function getStatus(marker, value) {
+  if (value === null || value === undefined || value === "") return "unknown";
+  const v = parseFloat(value);
+  if (marker.low !== undefined && v < marker.low) return "low";
+  if (marker.high !== undefined && v > marker.high) return "high";
+  return "normal";
+}
+const fmtDate  = (d) => { if (!d) return "—"; return new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); };
+const shortDt  = (d) => { if (!d) return "—"; return new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }); };
+
+const C = {
+  navy: "#1c3a5c", sky: "#eef4fb", white: "#ffffff",
+  text: "#132033", textM: "#4a6a8a", textL: "#8aaccc",
+  primary: "#2672b8", accent: "#e07b40",
+  success: "#2e9e6e", danger: "#dc4545", warning: "#e0a020",
+  border: "#d5e8f5", borderL: "#eaf2fb",
+};
+const inp = { padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontFamily: "'Nunito',sans-serif", fontSize: 14, color: C.text, background: "#fff", outline: "none", width: "100%", boxSizing: "border-box" };
+const lbl = { fontSize: 11, fontWeight: 800, color: C.textM, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 5, display: "block" };
+const card = { background: C.white, borderRadius: 14, border: `1px solid ${C.borderL}`, boxShadow: "0 2px 10px rgba(20,50,90,0.07)", padding: 20 };
+const btn = (v="primary") => ({ padding:"9px 18px", borderRadius:8, border: v==="ghost"?`1px solid ${C.border}`:"none", cursor:"pointer", fontWeight:700, fontSize:13, fontFamily:"'Nunito',sans-serif", background: v==="primary"?C.primary:v==="accent"?C.accent:v==="danger"?"#fde8e8":"transparent", color: v==="primary"||v==="accent"?"#fff":v==="danger"?C.danger:C.textM, display:"inline-flex", alignItems:"center", gap:6, transition:"opacity 0.15s" });
+
+function Badge({ status }) {
+  const m = { normal:["#e8f7f0",C.success,"Normal"], high:["#fde8e8",C.danger,"High"], low:["#fef3e2",C.warning,"Low"], unknown:[C.sky,C.textL,"—"] };
+  const [bg,color,label] = m[status]||m.unknown;
+  return <span style={{ fontSize:11, fontWeight:700, padding:"2px 9px", borderRadius:20, background:bg, color }}>{label}</span>;
+}
+
+function Modal({ onClose, title, children, width=620 }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(10,25,50,0.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:20 }}>
+      <div style={{ background:"#fff", borderRadius:18, width:"100%", maxWidth:width, maxHeight:"90vh", overflow:"auto", boxShadow:"0 28px 70px rgba(10,25,60,0.28)" }}>
+        <div style={{ padding:"18px 24px", borderBottom:`1px solid ${C.borderL}`, display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, background:"#fff", zIndex:1 }}>
+          <h2 style={{ margin:0, fontSize:17, fontWeight:800 }}>{title}</h2>
+          <button onClick={onClose} style={{ background:"none", border:"none", fontSize:24, cursor:"pointer", color:C.textM, lineHeight:1 }}>×</button>
+        </div>
+        <div style={{ padding:24 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+
+// ── API Key Manager ────────────────────────────────────────────────────────────
+function getApiKey() { return localStorage.getItem("ht_api_key") || ""; }
+function setApiKey(k) { localStorage.setItem("ht_api_key", k); }
+
+function ApiKeyModal({ onClose }) {
+  const [key, setKey] = useState(getApiKey());
+  const save = () => { setApiKey(key.trim()); onClose(); };
+  return (
+    <Modal onClose={onClose} title="🔑 Anthropic API Key" width={480}>
+      <p style={{ margin:"0 0 16px", fontSize:14, color:C.textM }}>
+        An Anthropic API key is needed for AI-powered features (lab report parsing and AI summary).
+        Your key is stored only in this browser and never sent anywhere except Anthropic's API.
+      </p>
+      <div style={{ marginBottom:14 }}>
+        <label style={lbl}>API Key</label>
+        <input type="password" value={key} onChange={e=>setKey(e.target.value)}
+          placeholder="sk-ant-..." style={inp} autoFocus />
+      </div>
+      <div style={{ fontSize:11, color:C.textL, marginBottom:18 }}>
+        Get your key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{ color:C.primary }}>console.anthropic.com</a>
+      </div>
+      <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+        <button style={btn("ghost")} onClick={onClose}>Cancel</button>
+        <button style={btn("primary")} onClick={save}>Save Key</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ── PIN Modal ──────────────────────────────────────────────────────────────────
+function PinModal({ hasPinSet, onSuccess, onClose }) {
+  const [pin, setPin] = useState(""); const [confirm, setConfirm] = useState(""); const [err, setErr] = useState("");
+  const submit = async () => {
+    if (!hasPinSet) {
+      if (pin.length < 4) { setErr("PIN must be at least 4 characters."); return; }
+      if (pin !== confirm) { setErr("PINs don't match."); return; }
+      await storage.set("editor_pin", pin, true).catch(()=>{});
+      onSuccess();
+    } else {
+      const stored = await storage.get("editor_pin", true).catch(()=>null);
+      if (stored && stored.value === pin) onSuccess();
+      else { setErr("Incorrect PIN."); setPin(""); }
+    }
+  };
+  return (
+    <Modal onClose={onClose} title={hasPinSet ? "🔐 Editor Access" : "🔐 Set Editor PIN"} width={400}>
+      <p style={{ margin:"0 0 18px", fontSize:14, color:C.textM }}>
+        {hasPinSet ? "Enter your PIN to unlock editing." : "Create a PIN to protect editing. Your mom sees the app in view-only mode without it."}
+      </p>
+      <div style={{ marginBottom:14 }}>
+        <label style={lbl}>{hasPinSet ? "PIN" : "Choose a PIN"}</label>
+        <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Enter PIN" style={inp} autoFocus />
+      </div>
+      {!hasPinSet && (
+        <div style={{ marginBottom:14 }}>
+          <label style={lbl}>Confirm PIN</label>
+          <input type="password" value={confirm} onChange={e=>{setConfirm(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Confirm PIN" style={inp} />
+        </div>
+      )}
+      {err && <div style={{ fontSize:13, color:C.danger, marginBottom:12, fontWeight:600 }}>⚠ {err}</div>}
+      <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+        <button style={btn("ghost")} onClick={onClose}>Cancel</button>
+        <button style={btn("accent")} onClick={submit}>{hasPinSet ? "Unlock" : "Set PIN & Unlock"}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Shared form fields used in both upload-review and manual entry ─────────────
+function LabForm({ date, setDate, labName, setLabName, vals, setVals, custom, setCustom, onSave, onBack, backLabel }) {
+  const [eosManual, setEosManual] = useState(false);
+
+  // Auto-calculate: Eos Abs (K/µL) = WBC × Eos% ÷ 100
+  const autoEosAbs = (vals.wbc !== undefined && vals.eosinophils_pct !== undefined)
+    ? Math.round(vals.wbc * vals.eosinophils_pct * 100) / 10000
+    : null;
+
+  useEffect(() => {
+    if (autoEosAbs !== null && !eosManual) {
+      setVals(prev => ({ ...prev, eosinophils_abs: autoEosAbs }));
+    }
+  }, [autoEosAbs, eosManual]);
+
+  const setV = (key, raw) => {
+    if (key === "eosinophils_abs") setEosManual(raw !== "");
+    setVals(prev => { const n={...prev}; if(raw==="")delete n[key]; else n[key]=parseFloat(raw); return n; });
+  };
+
+  const isAutoEos = autoEosAbs !== null && !eosManual;
+  const save = () => { onSave({ id:Date.now().toString(), date, labName, values:vals, custom:custom.filter(c=>c.name&&c.value!=="") }); };
+
+  return (
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:20 }}>
+        <div><label style={lbl}>Test Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)} style={inp} /></div>
+        <div><label style={lbl}>Lab / Facility</label><input type="text" value={labName} onChange={e=>setLabName(e.target.value)} placeholder="e.g. St. Luke's" style={inp} /></div>
+      </div>
+      {["CBC","Differential","HES Watch","Red Cell"].map(group=>(
+        <div key={group} style={{ marginBottom:18 }}>
+          <div style={{ fontSize:11, fontWeight:800, textTransform:"uppercase", letterSpacing:"0.06em", color:group==="HES Watch"?C.accent:C.textM, marginBottom:8 }}>{group==="HES Watch"?"⚡ ":""}{group}</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+            {CBC_MARKERS.filter(m=>m.group===group).map(m => {
+              const isAuto = m.key === "eosinophils_abs" && isAutoEos;
+              return (
+                <div key={m.key}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <label style={{ fontSize:12, color:m.highlight?C.accent:C.textM, width:140, flexShrink:0 }}>{m.label} <span style={{ color:C.textL }}>({m.unit})</span></label>
+                    <input type="number" step="0.01" value={vals[m.key]??""} onChange={e=>setV(m.key,e.target.value)} placeholder="—"
+                      style={{ ...inp, width:90, padding:"6px 10px", borderColor:isAuto?C.accent:C.border, background:isAuto?"#fff8f4":"#fff" }} />
+                  </div>
+                  {isAuto && (
+                    <div style={{ fontSize:10, color:C.accent, fontWeight:700, marginTop:2, marginLeft:148 }}>⚡ WBC × Eos% ÷ 100</div>
+                  )}
+                  {m.key==="eosinophils_abs" && autoEosAbs!==null && eosManual && (
+                    <div style={{ fontSize:10, color:C.textL, marginTop:2, marginLeft:148 }}>
+                      Auto: {autoEosAbs} &nbsp;
+                      <span onClick={()=>{setEosManual(false);setVals(p=>({...p,eosinophils_abs:autoEosAbs}));}} style={{ color:C.primary, cursor:"pointer", textDecoration:"underline" }}>restore</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      {custom.length>0 && (
+        <div style={{ marginBottom:14 }}>
+          <div style={{ fontSize:11, fontWeight:800, textTransform:"uppercase", letterSpacing:"0.06em", color:C.textM, marginBottom:8 }}>Other Markers</div>
+          {custom.map((c,i)=>(
+            <div key={i} style={{ display:"flex", gap:8, marginBottom:8, alignItems:"center" }}>
+              <input type="text" value={c.name} onChange={e=>{const n=[...custom];n[i]={...n[i],name:e.target.value};setCustom(n);}} style={inp} placeholder="Name" />
+              <input type="number" value={c.value} onChange={e=>{const n=[...custom];n[i]={...n[i],value:e.target.value};setCustom(n);}} style={{ ...inp,width:90 }} placeholder="Value" />
+              <input type="text" value={c.unit} onChange={e=>{const n=[...custom];n[i]={...n[i],unit:e.target.value};setCustom(n);}} style={{ ...inp,width:80 }} placeholder="Unit" />
+              <button onClick={()=>setCustom(custom.filter((_,j)=>j!==i))} style={{ background:"none", border:"none", cursor:"pointer", color:C.textL, fontSize:18, flexShrink:0 }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <button style={{ ...btn("ghost"), fontSize:12, marginBottom:20 }} onClick={()=>setCustom(r=>[...r,{name:"",value:"",unit:""}])}>+ Add custom marker</button>
+      <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+        {onBack && <button style={btn("ghost")} onClick={onBack}>{backLabel||"← Back"}</button>}
+        <button style={btn("primary")} onClick={save}>Save Results</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Upload Modal ───────────────────────────────────────────────────────────────
+function UploadModal({ onClose, onSave }) {
+  const [mode, setMode]   = useState("choose"); // choose | upload | parsing | review | manual
+  const [file, setFile]   = useState(null); const [fp, setFp] = useState(null); const [ft, setFt] = useState(null);
+  const [date, setDate]   = useState(new Date().toISOString().slice(0,10));
+  const [labName, setLabName] = useState("");
+  const [vals, setVals]   = useState({}); const [custom, setCustom] = useState([]);
+  const [err, setErr]     = useState(null);
+  const ref = useRef();
+
+  const handleFile = e => {
+    const f = e.target.files[0]; if(!f) return;
+    setFile(f); setFt(f.type);
+    const r = new FileReader(); r.onload = ev => setFp(ev.target.result); r.readAsDataURL(f);
+  };
+
+  const parse = async () => {
+    if (!fp) return; setMode("parsing"); setErr(null);
+    try {
+      const b64 = fp.split(",")[1];
+      const part = ft.startsWith("image/")
+        ? { type:"image", source:{ type:"base64", media_type:ft, data:b64 } }
+        : { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } };
+      const sys = `You are a medical lab report parser. Return ONLY valid JSON, no markdown, no preamble.\n{"date":"YYYY-MM-DD|null","lab_name":"str|null","values":{"wbc":n|null,"rbc":n|null,"hemoglobin":n|null,"hematocrit":n|null,"platelets":n|null,"neutrophils_abs":n|null,"neutrophils_pct":n|null,"lymphocytes_abs":n|null,"lymphocytes_pct":n|null,"eosinophils_abs":n|null,"eosinophils_pct":n|null,"monocytes_abs":n|null,"monocytes_pct":n|null,"basophils_abs":n|null,"basophils_pct":n|null,"mcv":n|null,"mch":n|null,"mchc":n|null,"rdw":n|null},"custom":[{"name":"str","value":n,"unit":"str"}]}\nUse null for missing. Numbers only (no units in value). custom = any lab value not in the list above.`;
+      const resp = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:sys, messages:[{ role:"user", content:[part,{type:"text",text:"Extract all lab values."}] }] }) });
+      const data = await resp.json();
+      const text = data.content.map(c=>c.text||"").join("").replace(/```json|```/g,"").trim();
+      const p = JSON.parse(text);
+      if (p.date) setDate(p.date);
+      if (p.lab_name) setLabName(p.lab_name);
+      if (p.values) { const f={}; for(const[k,v] of Object.entries(p.values)){if(v!==null&&v!==undefined)f[k]=v;} setVals(f); }
+      if (p.custom) setCustom(p.custom.filter(c=>c.name));
+      setMode("review");
+    } catch(e) { setErr("Parse failed: "+e.message); setMode("upload"); }
+  };
+
+  const handleSave = (result) => { onSave(result); onClose(); };
+
+  const tabStyle = (active) => ({
+    flex:1, padding:"10px 0", textAlign:"center", cursor:"pointer", fontWeight:active?800:600,
+    fontSize:14, borderBottom:`3px solid ${active?C.primary:"transparent"}`,
+    color:active?C.primary:C.textM, background:"none", border:"none",
+    borderBottom:`3px solid ${active?C.primary:"transparent"}`,
+    fontFamily:"'Nunito',sans-serif", transition:"all 0.15s",
+  });
+
+  return (
+    <Modal onClose={onClose} title="Add Lab Results" width={700}>
+
+      {/* Mode chooser — shown on first open and when not in upload/parsing/review */}
+      {mode==="choose" && (
+        <div>
+          <p style={{ margin:"0 0 20px", color:C.textM, fontSize:14 }}>How would you like to add this lab result?</p>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:24 }}>
+            <div onClick={()=>setMode("upload")} style={{ border:`2px solid ${C.border}`, borderRadius:14, padding:24, textAlign:"center", cursor:"pointer", background:C.sky, transition:"all 0.2s" }}
+              onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary}
+              onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+              <div style={{ fontSize:36, marginBottom:8 }}>📷</div>
+              <div style={{ fontWeight:800, fontSize:15, marginBottom:4 }}>Upload Photo / PDF</div>
+              <div style={{ fontSize:12, color:C.textM }}>Claude AI reads the report and extracts values automatically</div>
+              <div style={{ marginTop:10, fontSize:11, color:C.textL }}>Best on desktop</div>
+            </div>
+            <div onClick={()=>setMode("manual")} style={{ border:`2px solid ${C.border}`, borderRadius:14, padding:24, textAlign:"center", cursor:"pointer", background:C.sky, transition:"all 0.2s" }}
+              onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary}
+              onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+              <div style={{ fontSize:36, marginBottom:8 }}>✏️</div>
+              <div style={{ fontWeight:800, fontSize:15, marginBottom:4 }}>Enter Manually</div>
+              <div style={{ fontSize:12, color:C.textM }}>Type in values directly from the paper report</div>
+              <div style={{ marginTop:10, fontSize:11, color:C.textL }}>Works on mobile</div>
+            </div>
+          </div>
+          <div style={{ display:"flex", justifyContent:"flex-end" }}>
+            <button style={btn("ghost")} onClick={onClose}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Upload step */}
+      {mode==="upload" && (
+        <div>
+          <p style={{ margin:"0 0 18px", color:C.textM, fontSize:14 }}>Upload a photo or PDF — Claude AI will automatically extract all lab values.</p>
+          <div onClick={()=>ref.current.click()} style={{ border:`2px dashed ${file?C.primary:C.border}`, borderRadius:14, padding:"36px 20px", textAlign:"center", cursor:"pointer", background:file?"#f0f7ff":C.sky }}>
+            <div style={{ fontSize:40, marginBottom:8 }}>📄</div>
+            <div style={{ fontWeight:800, fontSize:15 }}>{file?file.name:"Click to select file"}</div>
+            <div style={{ fontSize:12, color:C.textL, marginTop:4 }}>JPG, PNG, or PDF</div>
+            <input ref={ref} type="file" accept="image/*,application/pdf" onChange={handleFile} style={{ display:"none" }} />
+          </div>
+          {fp && ft?.startsWith("image/") && <img src={fp} alt="" style={{ width:"100%", maxHeight:180, objectFit:"contain", marginTop:12, borderRadius:10, border:`1px solid ${C.border}` }} />}
+          {fp && ft==="application/pdf" && <div style={{ marginTop:12, padding:12, background:"#e8f7f0", borderRadius:8, fontSize:13, color:C.success, fontWeight:600 }}>✅ PDF: {file?.name}</div>}
+          {err && <div style={{ marginTop:12, padding:12, background:"#fde8e8", borderRadius:8, color:C.danger, fontSize:13 }}>{err}</div>}
+          <div style={{ marginTop:20, display:"flex", gap:10, justifyContent:"flex-end" }}>
+            <button style={btn("ghost")} onClick={()=>setMode("choose")}>← Back</button>
+            <button style={{ ...btn("accent"), opacity:file?1:0.5 }} onClick={parse} disabled={!file}>✨ Parse with AI</button>
+          </div>
+        </div>
+      )}
+
+      {/* Parsing step */}
+      {mode==="parsing" && (
+        <div style={{ textAlign:"center", padding:"50px 0" }}>
+          <div className="spin" style={{ fontSize:44, display:"inline-block", marginBottom:16 }}>🔬</div>
+          <div style={{ fontWeight:800, fontSize:17 }}>Analyzing lab report…</div>
+          <div style={{ color:C.textM, fontSize:13, marginTop:6 }}>Claude AI is reading and extracting values</div>
+          <div className="loading-bar" style={{ marginTop:28 }}><div className="loading-fill" /></div>
+        </div>
+      )}
+
+      {/* Review after AI parse */}
+      {mode==="review" && (
+        <div>
+          <div style={{ padding:"10px 14px", background:"#e8f7f0", borderRadius:10, fontSize:13, color:C.success, marginBottom:20, fontWeight:700 }}>
+            ✅ Extracted {Object.keys(vals).length} values — review before saving.
+          </div>
+          <LabForm date={date} setDate={setDate} labName={labName} setLabName={setLabName}
+            vals={vals} setVals={setVals} custom={custom} setCustom={setCustom}
+            onSave={handleSave} onBack={()=>setMode("upload")} backLabel="← Reupload" />
+        </div>
+      )}
+
+      {/* Manual entry */}
+      {mode==="manual" && (
+        <div>
+          <div style={{ padding:"10px 14px", background:C.sky, borderRadius:10, fontSize:13, color:C.textM, marginBottom:20 }}>
+            ✏️ Enter values from the lab report. Leave blank any test that wasn't included.
+          </div>
+          <LabForm date={date} setDate={setDate} labName={labName} setLabName={setLabName}
+            vals={vals} setVals={setVals} custom={custom} setCustom={setCustom}
+            onSave={handleSave} onBack={()=>setMode("choose")} backLabel="← Back" />
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ── Dashboard ──────────────────────────────────────────────────────────────────
+function Dashboard({ labResults, medications, notes, onUpload, isEditor }) {
+  if (!labResults.length) return (
+    <div style={{ ...card, textAlign:"center", padding:60, background:`linear-gradient(135deg,${C.navy} 0%,#2a5f96 100%)`, color:"#fff" }}>
+      <div style={{ fontSize:52, marginBottom:16 }}>🩺</div>
+      <h2 style={{ margin:"0 0 8px", fontSize:24, fontWeight:800 }}>Mom's Health Tracker</h2>
+      <p style={{ margin:"0 0 28px", opacity:0.7, fontSize:14 }}>{isEditor?"Upload the first lab report to get started.":"No lab results have been added yet."}</p>
+      {isEditor && <button style={{ ...btn("accent"), padding:"13px 30px", fontSize:15 }} onClick={onUpload}>✨ Upload First Lab Report</button>}
+    </div>
+  );
+
+  // Sort all results by date ascending (safe null handling)
+  const sorted = [...labResults].sort((a,b)=>((a.date||"")).localeCompare((b.date||"")));
+
+  // MERGED LATEST: accumulate the most recent value for every marker across ALL results.
+  // This handles cases where CBC and chemistry are uploaded as separate results.
+  const merged = {};
+  let latestDate = "";
+  sorted.forEach(r => {
+    if ((r.date||"") >= latestDate) latestDate = r.date||"";
+    if (r.values) Object.entries(r.values).forEach(([k,v])=>{ if(v!==undefined&&v!==null) merged[k]=v; });
+  });
+
+  const todayMeds = medications.filter(m=>m.frequency==="daily"||m.frequency==="twice daily");
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+      {/* Key stats — show latest value; use merged so separate uploads don't hide each other */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14 }}>
+        {["wbc","hemoglobin","platelets"].map(key=>{
+          const m=MMAP[key], v=merged[key], st=getStatus(m,v);
+          return (
+            <div key={key} style={card}>
+              <div style={{ fontSize:11, fontWeight:800, textTransform:"uppercase", letterSpacing:"0.06em", color:C.textL, marginBottom:4 }}>{m.label}</div>
+              <div style={{ fontSize:30, fontWeight:800 }}>
+                {v!==undefined ? v : <span style={{ color:C.textL }}>—</span>}
+                <span style={{ fontSize:12, color:C.textM, marginLeft:4 }}>{m.unit}</span>
+              </div>
+              <div style={{ marginTop:6, display:"flex", gap:8, alignItems:"center" }}>
+                <Badge status={st}/>
+                <span style={{ fontSize:11, color:C.textL }}>{fmtDate(latestDate)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* HES Watch */}
+      <div style={{ ...card, border:`2px solid ${C.accent}30`, background:"linear-gradient(135deg,#fff8f4 0%,#fff 100%)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
+          <span style={{ background:C.accent, color:"#fff", borderRadius:8, padding:"4px 12px", fontSize:11, fontWeight:800, letterSpacing:"0.07em" }}>⚡ HES WATCH</span>
+          <span style={{ fontSize:13, color:C.textM }}>Eosinophil monitoring — HES threshold: Abs &gt; 1.5 K/µL</span>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20 }}>
+          {[["eosinophils_abs","Eosinophils (Absolute)"],["eosinophils_pct","Eosinophils %"]].map(([key,lbl_])=>{
+            const m=MMAP[key], v=merged[key], st=getStatus(m,v);
+            const alarm=key==="eosinophils_abs"&&v!==undefined&&parseFloat(v)>1.5;
+            return (
+              <div key={key}>
+                <div style={{ fontSize:11, fontWeight:700, color:C.accent, marginBottom:4 }}>{lbl_}</div>
+                <div style={{ fontSize:36, fontWeight:800, color:alarm?C.danger:C.text }}>
+                  {v!==undefined ? v : <span style={{ color:C.textL }}>—</span>}
+                  <span style={{ fontSize:13, color:C.textM, marginLeft:4 }}>{m.unit}</span>
+                </div>
+                <div style={{ marginTop:5, display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
+                  <Badge status={st}/>
+                  {alarm&&<span style={{ fontSize:11, color:C.danger, fontWeight:700 }}>⚠ Above HES threshold</span>}
+                </div>
+                <div style={{ fontSize:11, color:C.textL, marginTop:6 }}>Normal: {m.low}–{m.high} {m.unit}{key==="eosinophils_abs"?" · HES: >1.5":""}</div>
+              </div>
+            );
+          })}
+        </div>
+        {sorted.length>1&&(
+          <div style={{ marginTop:16, height:90 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={sorted.map(r=>({ date:shortDt(r.date), eos:r.values?.eosinophils_abs }))}>
+                <XAxis dataKey="date" tick={{ fontSize:10, fill:C.textL }}/><YAxis tick={{ fontSize:10, fill:C.textL }} width={30}/>
+                <Tooltip contentStyle={{ fontSize:11, borderRadius:8 }}/>
+                <ReferenceLine y={1.5} stroke={C.danger} strokeDasharray="4 2"/>
+                <ReferenceLine y={0.5} stroke={C.warning} strokeDasharray="4 2"/>
+                <Line type="monotone" dataKey="eos" name="Eos Abs" stroke={C.accent} strokeWidth={2.5} dot={{ r:4, fill:C.accent }} connectNulls/>
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {/* Medications & Notes */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+        <div style={card}>
+          <h3 style={{ margin:"0 0 14px", fontSize:14, fontWeight:800 }}>💊 Today's Medications</h3>
+          {todayMeds.length===0?<p style={{ fontSize:13, color:C.textL, margin:0 }}>No daily medications logged.</p>:
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>{todayMeds.map(m=>(
+              <div key={m.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"9px 12px", background:C.sky, borderRadius:9 }}>
+                <div><div style={{ fontSize:13, fontWeight:700 }}>{m.name}</div><div style={{ fontSize:11, color:C.textM }}>{m.dosage}</div></div>
+                {m.time&&<div style={{ fontSize:11, color:C.textL }}>{m.time}</div>}
+              </div>
+            ))}</div>}
+        </div>
+        <div style={card}>
+          <h3 style={{ margin:"0 0 14px", fontSize:14, fontWeight:800 }}>📋 Recent Notes</h3>
+          {notes.length===0?<p style={{ fontSize:13, color:C.textL, margin:0 }}>No notes yet.</p>:
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>{[...notes].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,3).map(n=>(
+              <div key={n.id} style={{ borderLeft:`3px solid ${C.primary}`, paddingLeft:10 }}>
+                <div style={{ fontSize:11, color:C.textM, marginBottom:2 }}>{fmtDate(n.date)}{n.doctor?` · ${n.doctor}`:""}</div>
+                <div style={{ fontSize:13, lineHeight:1.4 }}>{n.note.slice(0,90)}{n.note.length>90?"…":""}</div>
+              </div>
+            ))}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Lab Results ────────────────────────────────────────────────────────────────
+function LabResultsView({ labResults, onUpload, onDelete, isEditor }) {
+  const [expanded, setExpanded] = useState(null);
+  const sorted = [...labResults].sort((a,b)=>b.date.localeCompare(a.date));
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <span style={{ fontSize:13, color:C.textM }}>{labResults.length} result{labResults.length!==1?"s":""} recorded</span>
+        {isEditor&&<button style={btn("accent")} onClick={onUpload}>✨ Upload Lab Report</button>}
+      </div>
+      {sorted.length===0?<div style={{ ...card, textAlign:"center", padding:48 }}><div style={{ fontSize:40, marginBottom:12 }}>🔬</div><div style={{ fontWeight:700 }}>No lab results yet</div></div>:
+        sorted.map(r=>(
+          <div key={r.id} style={card}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
+              <div><div style={{ fontWeight:800, fontSize:16 }}>{fmtDate(r.date)}</div>{r.labName&&<div style={{ fontSize:12, color:C.textM }}>{r.labName}</div>}</div>
+              <div style={{ display:"flex", gap:8 }}>
+                <button style={{ ...btn("ghost"), fontSize:12 }} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>{expanded===r.id?"Hide":"Details"}</button>
+                {isEditor&&<button style={{ ...btn("danger"), fontSize:12 }} onClick={()=>onDelete(r.id)}>Delete</button>}
+              </div>
+            </div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
+              {CBC_MARKERS.filter(m=>r.values[m.key]!==undefined).map(m=>{
+                const st=getStatus(m,r.values[m.key]);
+                return <div key={m.key} style={{ padding:"4px 10px", borderRadius:7, fontSize:12, background:st==="normal"?C.sky:st==="high"?"#fde8e8":"#fef3e2" }}><span style={{ color:C.textM }}>{m.label}: </span><span style={{ fontWeight:700, color:st==="normal"?C.text:st==="high"?C.danger:C.warning }}>{r.values[m.key]} {m.unit}</span></div>;
+              })}
+              {(r.custom||[]).map((c,i)=><div key={i} style={{ padding:"4px 10px", borderRadius:7, fontSize:12, background:C.sky }}><span style={{ color:C.textM }}>{c.name}: </span><span style={{ fontWeight:700 }}>{c.value} {c.unit}</span></div>)}
+            </div>
+            {expanded===r.id&&(
+              <div style={{ marginTop:16, borderTop:`1px solid ${C.borderL}`, paddingTop:16 }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                  <thead><tr style={{ background:C.sky }}>{["Marker","Value","Unit","Normal Range","Status"].map(h=><th key={h} style={{ padding:"8px 12px", textAlign:"left", fontSize:11, fontWeight:800, textTransform:"uppercase", letterSpacing:"0.04em", color:C.textM }}>{h}</th>)}</tr></thead>
+                  <tbody>{CBC_MARKERS.filter(m=>r.values[m.key]!==undefined).map((m,i)=>{
+                    const st=getStatus(m,r.values[m.key]);
+                    return <tr key={m.key} style={{ background:i%2===0?"#fff":C.sky, borderBottom:`1px solid ${C.borderL}` }}>
+                      <td style={{ padding:"8px 12px", fontWeight:600 }}>{m.highlight&&<span style={{ color:C.accent }}>★ </span>}{m.label}</td>
+                      <td style={{ padding:"8px 12px", fontWeight:700, color:st==="high"?C.danger:st==="low"?C.warning:C.text }}>{r.values[m.key]}</td>
+                      <td style={{ padding:"8px 12px", color:C.textM }}>{m.unit}</td>
+                      <td style={{ padding:"8px 12px", color:C.textM }}>{m.low}–{m.high}</td>
+                      <td style={{ padding:"8px 12px" }}><Badge status={st}/></td>
+                    </tr>;
+                  })}</tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ))
+      }
+    </div>
+  );
+}
+
+// ── Trends ─────────────────────────────────────────────────────────────────────
+function TrendsView({ labResults }) {
+  const [sel, setSel] = useState(["eosinophils_abs","wbc","platelets"]);
+  const sorted = [...labResults].sort((a,b)=>a.date.localeCompare(b.date));
+  const data = sorted.map(r=>{ const row={date:shortDt(r.date)}; sel.forEach(k=>{row[k]=r.values[k]!==undefined?r.values[k]:null;}); return row; });
+  const toggle = k => setSel(p=>p.includes(k)?p.filter(x=>x!==k):[...p,k]);
+  if (labResults.length<2) return <div style={{ ...card, textAlign:"center", padding:48 }}><div style={{ fontSize:40, marginBottom:12 }}>📈</div><div style={{ fontWeight:700 }}>Need at least 2 lab results to show trends</div></div>;
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+      <div style={card}>
+        <h3 style={{ margin:"0 0 14px", fontSize:14, fontWeight:800 }}>Select Markers to Chart</h3>
+        {["HES Watch","CBC","Differential","Red Cell"].map(group=>(
+          <div key={group} style={{ marginBottom:14 }}>
+            <div style={{ fontSize:11, fontWeight:800, textTransform:"uppercase", letterSpacing:"0.05em", color:group==="HES Watch"?C.accent:C.textM, marginBottom:7 }}>{group==="HES Watch"?"⚡ ":""}{group}</div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+              {CBC_MARKERS.filter(m=>m.group===group).map(m=>(
+                <button key={m.key} onClick={()=>toggle(m.key)} style={{ padding:"5px 12px", borderRadius:20, fontSize:12, cursor:"pointer", border:`2px solid ${sel.includes(m.key)?m.color:C.border}`, background:sel.includes(m.key)?m.color+"22":"transparent", color:sel.includes(m.key)?m.color:C.textM, fontWeight:sel.includes(m.key)?700:400, fontFamily:"'Nunito',sans-serif", transition:"all 0.15s" }}>{m.label}</button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      {sel.length>0&&(
+        <div style={card}>
+          <h3 style={{ margin:"0 0 16px", fontSize:14, fontWeight:800 }}>Trend Chart</h3>
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={data} margin={{ top:5, right:20, bottom:5, left:0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.borderL}/>
+              <XAxis dataKey="date" tick={{ fontSize:11, fill:C.textM }}/><YAxis tick={{ fontSize:11, fill:C.textM }} width={40}/>
+              <Tooltip contentStyle={{ fontFamily:"'Nunito',sans-serif", fontSize:12, borderRadius:10, border:`1px solid ${C.border}` }}/><Legend wrapperStyle={{ fontSize:12, paddingTop:8 }}/>
+              {sel.map(k=>{ const m=MMAP[k]; if(!m)return null; return <Line key={k} type="monotone" dataKey={k} name={m.label} stroke={m.color} strokeWidth={2.5} dot={{ r:4 }} connectNulls/>; })}
+              {sel.length===1&&(()=>{ const m=MMAP[sel[0]]; if(!m)return null; return <><ReferenceLine y={m.high} stroke={C.danger} strokeDasharray="4 2"/><ReferenceLine y={m.low} stroke={C.warning} strokeDasharray="4 2"/></>; })()}
+            </LineChart>
+          </ResponsiveContainer>
+          <div style={{ fontSize:11, color:C.textL, textAlign:"center", marginTop:8 }}>{sorted.length} data points · {fmtDate(sorted[0]?.date)} to {fmtDate(sorted[sorted.length-1]?.date)}</div>
+        </div>
+      )}
+      {sel.length>0&&(
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
+          {sel.map(k=>{ const m=MMAP[k]; if(!m)return null;
+            const lat=[...sorted].reverse().find(r=>r.values[k]!==undefined);
+            const prv=[...sorted].reverse().slice(1).find(r=>r.values[k]!==undefined);
+            const v=lat?.values[k],pv=prv?.values[k];
+            const trend=pv!==undefined&&v!==undefined?(parseFloat(v)>parseFloat(pv)?"↑":parseFloat(v)<parseFloat(pv)?"↓":"→"):null;
+            const st=getStatus(m,v);
+            return (
+              <div key={k} style={card}>
+                <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:m.color, marginBottom:4 }}>{m.label}</div>
+                <div style={{ fontSize:26, fontWeight:800 }}>{v!==undefined?v:<span style={{ color:C.textL }}>—</span>}<span style={{ fontSize:12, color:C.textM, marginLeft:3 }}>{m.unit}</span>{trend&&<span style={{ fontSize:18, marginLeft:6, color:trend==="↑"?(st==="high"?C.danger:C.success):trend==="↓"?(st==="low"?C.warning:C.danger):C.textM }}>{trend}</span>}</div>
+                <div style={{ marginTop:5, display:"flex", gap:6, alignItems:"center" }}><Badge status={st}/><span style={{ fontSize:10, color:C.textL }}>Ref: {m.low}–{m.high}</span></div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Medications ────────────────────────────────────────────────────────────────
+function MedicationsView({ medications, onSave, isEditor }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const blank = { name:"", dosage:"", frequency:"daily", time:"", notes:"", startDate:"" };
+  const [form, setForm] = useState(blank);
+  const sf = (k,v) => setForm(f=>({...f,[k]:v}));
+  const add = () => { if(!form.name)return; onSave([...medications,{...form,id:Date.now().toString()}]); setForm(blank); setShowAdd(false); };
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+      {isEditor&&<div style={{ display:"flex", justifyContent:"flex-end" }}><button style={btn("primary")} onClick={()=>setShowAdd(true)}>+ Add Medication</button></div>}
+      {medications.length===0?<div style={{ ...card, textAlign:"center", padding:48 }}><div style={{ fontSize:40, marginBottom:12 }}>💊</div><div style={{ fontWeight:700 }}>No medications added yet</div></div>:
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          {medications.map(m=>(
+            <div key={m.id} style={card}>
+              <div style={{ display:"flex", justifyContent:"space-between" }}><div style={{ fontSize:28, marginBottom:10 }}>💊</div>{isEditor&&<button onClick={()=>onSave(medications.filter(x=>x.id!==m.id))} style={{ background:"none", border:"none", cursor:"pointer", color:C.textL, fontSize:18 }}>×</button>}</div>
+              <div style={{ fontWeight:800, fontSize:15, marginBottom:2 }}>{m.name}</div>
+              <div style={{ fontSize:13, color:C.textM, marginBottom:10 }}>{m.dosage}</div>
+              <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+                <span style={{ fontSize:11, fontWeight:700, padding:"3px 9px", background:C.sky, color:C.textM, borderRadius:20 }}>{m.frequency}</span>
+                {m.time&&<span style={{ fontSize:11, fontWeight:700, padding:"3px 9px", background:C.sky, color:C.textM, borderRadius:20 }}>🕒 {m.time}</span>}
+              </div>
+              {m.startDate&&<div style={{ fontSize:11, color:C.textL, marginTop:6 }}>Since {fmtDate(m.startDate)}</div>}
+              {m.notes&&<div style={{ fontSize:12, color:C.textM, marginTop:6, fontStyle:"italic" }}>{m.notes}</div>}
+            </div>
+          ))}
+        </div>
+      }
+      {showAdd&&(
+        <Modal onClose={()=>setShowAdd(false)} title="Add Medication">
+          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+            <div><label style={lbl}>Medication Name *</label><input style={inp} value={form.name} onChange={e=>sf("name",e.target.value)} placeholder="e.g. Imatinib"/></div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div><label style={lbl}>Dosage</label><input style={inp} value={form.dosage} onChange={e=>sf("dosage",e.target.value)} placeholder="e.g. 400mg"/></div>
+              <div><label style={lbl}>Time</label><input style={inp} type="time" value={form.time} onChange={e=>sf("time",e.target.value)}/></div>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div><label style={lbl}>Frequency</label><select style={inp} value={form.frequency} onChange={e=>sf("frequency",e.target.value)}><option value="daily">Daily</option><option value="twice daily">Twice Daily</option><option value="weekly">Weekly</option><option value="as needed">As Needed</option><option value="other">Other</option></select></div>
+              <div><label style={lbl}>Start Date</label><input style={inp} type="date" value={form.startDate} onChange={e=>sf("startDate",e.target.value)}/></div>
+            </div>
+            <div><label style={lbl}>Notes</label><input style={inp} value={form.notes} onChange={e=>sf("notes",e.target.value)} placeholder="e.g. Take with food"/></div>
+            <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}><button style={btn("ghost")} onClick={()=>setShowAdd(false)}>Cancel</button><button style={btn("primary")} onClick={add}>Add Medication</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Notes ──────────────────────────────────────────────────────────────────────
+function NotesView({ notes, onSave, isEditor }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const blank = { date:new Date().toISOString().slice(0,10), doctor:"", type:"Doctor Visit", note:"" };
+  const [form, setForm] = useState(blank);
+  const sf = (k,v) => setForm(f=>({...f,[k]:v}));
+  const sorted = [...notes].sort((a,b)=>b.date.localeCompare(a.date));
+  const add = () => { if(!form.note)return; onSave([...notes,{...form,id:Date.now().toString()}]); setForm(blank); setShowAdd(false); };
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+      {isEditor&&<div style={{ display:"flex", justifyContent:"flex-end" }}><button style={btn("primary")} onClick={()=>setShowAdd(true)}>+ Add Note</button></div>}
+      {sorted.length===0?<div style={{ ...card, textAlign:"center", padding:48 }}><div style={{ fontSize:40, marginBottom:12 }}>📋</div><div style={{ fontWeight:700 }}>No notes yet</div></div>:
+        sorted.map(n=>(
+          <div key={n.id} style={card}>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:10 }}>
+              <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+                <span style={{ fontWeight:800, fontSize:14 }}>{fmtDate(n.date)}</span>
+                <span style={{ fontSize:11, padding:"2px 9px", borderRadius:20, background:C.primary+"18", color:C.primary, fontWeight:700 }}>{n.type}</span>
+                {n.doctor&&<span style={{ fontSize:12, color:C.textM }}>— {n.doctor}</span>}
+              </div>
+              {isEditor&&<button onClick={()=>onSave(notes.filter(x=>x.id!==n.id))} style={{ background:"none", border:"none", cursor:"pointer", color:C.textL, fontSize:18 }}>×</button>}
+            </div>
+            <div style={{ fontSize:14, lineHeight:1.65 }}>{n.note}</div>
+          </div>
+        ))
+      }
+      {showAdd&&(
+        <Modal onClose={()=>setShowAdd(false)} title="Add Note">
+          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div><label style={lbl}>Date</label><input style={inp} type="date" value={form.date} onChange={e=>sf("date",e.target.value)}/></div>
+              <div><label style={lbl}>Type</label><select style={inp} value={form.type} onChange={e=>sf("type",e.target.value)}><option>Doctor Visit</option><option>Lab Visit</option><option>Symptom Log</option><option>Medication Change</option><option>General Note</option></select></div>
+            </div>
+            <div><label style={lbl}>Doctor / Facility</label><input style={inp} value={form.doctor} onChange={e=>sf("doctor",e.target.value)} placeholder="e.g. Dr. Santos — Hematology"/></div>
+            <div><label style={lbl}>Note *</label><textarea value={form.note} onChange={e=>sf("note",e.target.value)} placeholder="What happened at the visit? Symptoms, changes, or observations?" style={{ ...inp, height:120, resize:"vertical" }}/></div>
+            <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}><button style={btn("ghost")} onClick={()=>setShowAdd(false)}>Cancel</button><button style={btn("primary")} onClick={add}>Add Note</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Summary View ──────────────────────────────────────────────────────────────
+function SummaryView({ labResults, medications, notes }) {
+  const [summary, setSummary]       = useState("");
+  const [generatedAt, setGenAt]     = useState(null);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState(null);
+  const hasData = labResults.length > 0;
+
+  const generate = async () => {
+    if (!hasData) return;
+    setLoading(true); setError(null);
+    try {
+      const sorted = [...labResults].sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+
+      const labLines = sorted.map(r => {
+        const vals = Object.entries(r.values||{}).map(([k,v])=>`${MMAP[k]?.label||k}: ${v} ${MMAP[k]?.unit||""}`).join(", ");
+        const custom = (r.custom||[]).map(c=>`${c.name}: ${c.value} ${c.unit}`).join(", ");
+        return `${r.date}${r.labName?` (${r.labName})`:""}:\n  ${vals}${custom?`, ${custom}`:""}`;
+      }).join("\n");
+
+      const medLines = medications.length
+        ? medications.map(m=>`${m.name} ${m.dosage} — ${m.frequency}${m.time?` at ${m.time}`:""}${m.notes?` (${m.notes})`:""}`)
+            .join("\n")
+        : "None recorded.";
+
+      const noteLines = notes.length
+        ? [...notes].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,5)
+            .map(n=>`${n.date} [${n.type}]${n.doctor?` — ${n.doctor}`:""}:\n  ${n.note}`).join("\n")
+        : "None recorded.";
+
+      const prompt = `You are helping the family of a 62-year-old female patient understand her current health status in plain language.
+
+Patient background:
+- Secondary AML diagnosed October 2024
+- Allogeneic stem cell transplant January 2025 — currently in remission
+- Hypereosinophilic Syndrome (HES) diagnosed October 2025
+- HES clinical threshold: Eosinophils Absolute Count (AEC) > 1.5 K/µL
+
+Write a clear, warm, 3-paragraph summary:
+• Paragraph 1 — Overall blood count health: comment on WBC, hemoglobin, platelets, and general status. Note any values outside normal range.
+• Paragraph 2 — HES/Eosinophil focus: describe the current eosinophil levels and trend over time. Is she above/below/near the HES threshold? Is it improving, stable, or worsening?
+• Paragraph 3 — Medications and correlation: how do her current medications relate to her conditions? Note anything worth watching based on recent doctor notes.
+
+Tone: informative but accessible — the reader is the patient and her family, not clinicians. Avoid dense jargon. Be honest but compassionate about out-of-range values.
+
+LAB RESULTS (oldest → newest):
+${labLines}
+
+CURRENT MEDICATIONS:
+${medLines}
+
+RECENT NOTES:
+${noteLines}`;
+
+      const apiKey = getApiKey();
+      if (!apiKey) { throw new Error("No API key set. Click the ⚙ Settings button in the sidebar to add your Anthropic API key."); }
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method:"POST", headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+        body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1200, messages:[{role:"user",content:prompt}] })
+      });
+      const data = await resp.json();
+      const text = data.content.map(c=>c.text||"").join("");
+      setSummary(text);
+      setGenAt(new Date());
+    } catch(e) { setError("Could not generate summary: "+e.message); }
+    setLoading(false);
+  };
+
+  // Auto-generate on first open if data exists
+  useEffect(()=>{ if(hasData && !summary) generate(); },[hasData]);
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
+        <div>
+          <div style={{ fontSize:13, color:C.textM }}>AI-written summary of current health status, correlated with medications and notes.</div>
+          {generatedAt && <div style={{ fontSize:11, color:C.textL, marginTop:2 }}>Last generated: {generatedAt.toLocaleString()}</div>}
+        </div>
+        <button style={btn("primary")} onClick={generate} disabled={loading||!hasData}>
+          {loading ? "Generating…" : "↻ Regenerate"}
+        </button>
+      </div>
+
+      {loading && (
+        <div style={{ ...card, textAlign:"center", padding:52 }}>
+          <div className="spin" style={{ fontSize:38, display:"inline-block", marginBottom:14 }}>✨</div>
+          <div style={{ fontWeight:800, fontSize:16 }}>Generating health summary…</div>
+          <div style={{ color:C.textM, fontSize:13, marginTop:5 }}>Analyzing lab trends, medications, and notes</div>
+          <div className="loading-bar" style={{ marginTop:22 }}><div className="loading-fill"/></div>
+        </div>
+      )}
+
+      {error && !loading && (
+        <div style={{ ...card, background:"#fde8e8", color:C.danger, fontSize:13, padding:16 }}>{error}</div>
+      )}
+
+      {summary && !loading && (
+        <div style={{ ...card, fontSize:15, lineHeight:1.85, color:C.text }}>
+          {/* Disclaimer banner */}
+          <div style={{ padding:"8px 14px", background:C.sky, borderRadius:8, fontSize:11, color:C.textM, marginBottom:20, display:"flex", gap:6 }}>
+            <span>ℹ️</span>
+            <span>This summary is AI-generated for informational purposes only. Always consult your medical team for clinical decisions.</span>
+          </div>
+          {summary.split(/\n\n+/).map((para,i)=>(
+            para.trim() && <p key={i} style={{ margin:"0 0 18px" }}>{para.trim()}</p>
+          ))}
+        </div>
+      )}
+
+      {!summary && !loading && !error && (
+        <div style={{ ...card, textAlign:"center", padding:52 }}>
+          <div style={{ fontSize:42, marginBottom:14 }}>✨</div>
+          <div style={{ fontWeight:700, fontSize:15 }}>No summary yet</div>
+          <div style={{ fontSize:13, color:C.textM, marginTop:5 }}>
+            {hasData ? "Click Regenerate to create a summary." : "Upload lab results first to generate a summary."}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Files View ─────────────────────────────────────────────────────────────────
+function FilesView({ isEditor }) {
+  const [files, setFiles]       = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError]       = useState(null);
+  const [preview, setPreview]   = useState(null); // {name, dataUrl, type}
+  const fileRef = useRef();
+
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const meta = await storage.get("file_list",true).catch(()=>null);
+        if(meta) setFiles(JSON.parse(meta.value));
+      } catch(e){}
+      setLoading(false);
+    })();
+  },[]);
+
+  const handleUpload = async (e) => {
+    const f = e.target.files[0]; if(!f) return;
+    if(f.size > 4*1024*1024){ setError(`File too large (${(f.size/1024/1024).toFixed(1)} MB). Maximum is 4 MB per file.`); e.target.value=""; return; }
+    setUploading(true); setError(null);
+    try {
+      const dataUrl = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=ev=>res(ev.target.result); r.onerror=()=>rej(new Error("Read failed")); r.readAsDataURL(f); });
+      const id = Date.now().toString();
+      const rec = { id, name:f.name, type:f.type, size:f.size, uploadedAt:new Date().toISOString() };
+      await storage.set(`file_data:${id}`, dataUrl, true).catch(()=>{throw new Error("Storage write failed — file may be too large.");});
+      const newFiles = [...files, rec];
+      setFiles(newFiles);
+      await storage.set("file_list", JSON.stringify(newFiles), true).catch(()=>{});
+    } catch(e){ setError("Upload failed: "+e.message); }
+    setUploading(false); e.target.value="";
+  };
+
+  const download = async (file) => {
+    try {
+      const stored = await storage.get(`file_data:${file.id}`,true).catch(()=>null);
+      if(!stored){ setError("File data not found."); return; }
+      const a=document.createElement("a"); a.href=stored.value; a.download=file.name; a.click();
+    } catch(e){ setError("Download failed: "+e.message); }
+  };
+
+  const openPreview = async (file) => {
+    try {
+      const stored = await storage.get(`file_data:${file.id}`,true).catch(()=>null);
+      if(!stored){ setError("File data not found."); return; }
+      setPreview({ name:file.name, dataUrl:stored.value, type:file.type });
+    } catch(e){ setError("Preview failed: "+e.message); }
+  };
+
+  const del = async (id) => {
+    const newFiles = files.filter(f=>f.id!==id);
+    setFiles(newFiles);
+    await storage.set("file_list",JSON.stringify(newFiles),true).catch(()=>{});
+    await storage.delete(`file_data:${id}`,true).catch(()=>{});
+  };
+
+  const icon = (type) => type==="application/pdf"?"📄":type.startsWith("image/")?"🖼️":"📎";
+  const fmtSz = (b) => b<1024?`${b} B`:b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(1)} MB`;
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+      {isEditor && (
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
+          <div style={{ fontSize:13, color:C.textM }}>Store medical documents for safekeeping. Max 4 MB per file.</div>
+          <button style={btn("primary")} onClick={()=>fileRef.current.click()} disabled={uploading}>
+            {uploading?"Uploading…":"+ Upload File"}
+          </button>
+          <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt,.csv" onChange={handleUpload} style={{ display:"none" }}/>
+        </div>
+      )}
+
+      {error && <div style={{ padding:"12px 16px", background:"#fde8e8", color:C.danger, fontSize:13, borderRadius:10, fontWeight:600 }}>⚠ {error}</div>}
+
+      {loading ? (
+        <div style={{ ...card, textAlign:"center", padding:40, color:C.textM }}>Loading files…</div>
+      ) : files.length===0 ? (
+        <div style={{ ...card, textAlign:"center", padding:56 }}>
+          <div style={{ fontSize:44, marginBottom:14 }}>📁</div>
+          <div style={{ fontWeight:800, fontSize:15 }}>No files uploaded yet</div>
+          <div style={{ fontSize:13, color:C.textM, marginTop:5, maxWidth:340, margin:"8px auto 0" }}>
+            Upload NGS results, bone marrow biopsy reports, imaging scans, and other important documents here.
+          </div>
+          {isEditor && <button style={{ ...btn("primary"), marginTop:20 }} onClick={()=>fileRef.current.click()}>+ Upload First File</button>}
+        </div>
+      ) : (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {files.map(f=>(
+            <div key={f.id} style={{ ...card, display:"flex", alignItems:"center", gap:14, padding:"14px 20px" }}>
+              <div style={{ fontSize:30, flexShrink:0 }}>{icon(f.type)}</div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontWeight:700, fontSize:14, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</div>
+                <div style={{ fontSize:11, color:C.textM, marginTop:2 }}>
+                  {fmtSz(f.size)} · Uploaded {new Date(f.uploadedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+                </div>
+              </div>
+              <div style={{ display:"flex", gap:8, flexShrink:0 }}>
+                {(f.type==="application/pdf"||f.type.startsWith("image/")) && (
+                  <button style={{ ...btn("ghost"), fontSize:12 }} onClick={()=>openPreview(f)}>👁 View</button>
+                )}
+                <button style={{ ...btn("ghost"), fontSize:12 }} onClick={()=>download(f)}>⬇ Download</button>
+                {isEditor && <button style={{ ...btn("danger"), fontSize:12 }} onClick={()=>del(f.id)}>Delete</button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Preview modal */}
+      {preview && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(10,25,50,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:20 }}>
+          <div style={{ background:"#fff", borderRadius:18, width:"100%", maxWidth:820, maxHeight:"92vh", overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:"0 28px 70px rgba(10,25,60,0.3)" }}>
+            <div style={{ padding:"14px 20px", borderBottom:`1px solid ${C.borderL}`, display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
+              <div style={{ fontWeight:800, fontSize:15, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{preview.name}</div>
+              <div style={{ display:"flex", gap:10 }}>
+                <button style={{ ...btn("ghost"), fontSize:12 }} onClick={()=>{ const a=document.createElement("a"); a.href=preview.dataUrl; a.download=preview.name; a.click(); }}>⬇ Download</button>
+                <button onClick={()=>setPreview(null)} style={{ background:"none", border:"none", fontSize:24, cursor:"pointer", color:C.textM, lineHeight:1 }}>×</button>
+              </div>
+            </div>
+            <div style={{ flex:1, overflow:"auto", background:"#f5f5f5", display:"flex", alignItems:"center", justifyContent:"center" }}>
+              {preview.type.startsWith("image/")
+                ? <img src={preview.dataUrl} alt={preview.name} style={{ maxWidth:"100%", maxHeight:"80vh", objectFit:"contain" }}/>
+                : <iframe src={preview.dataUrl} title={preview.name} style={{ width:"100%", height:"78vh", border:"none" }}/>
+              }
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Export ─────────────────────────────────────────────────────────────────────
+function ExportView({ labResults, medications, notes }) {
+  const exportCSV = () => {
+    if(!labResults.length)return;
+    const s=[...labResults].sort((a,b)=>a.date.localeCompare(b.date));
+    const keys=[...new Set(s.flatMap(r=>Object.keys(r.values)))];
+    const hdr=["Date","Lab Name",...keys.map(k=>MMAP[k]?.label||k)];
+    const rows=s.map(r=>[r.date,r.labName||"",...keys.map(k=>r.values[k]??"")]);
+    const csv=[hdr,...rows].map(r=>r.join(",")).join("\n");
+    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"})); a.download="lab-results.csv"; a.click();
+  };
+  const exportJSON = () => {
+    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([JSON.stringify({labResults,medications,notes,exportedAt:new Date().toISOString()},null,2)],{type:"application/json"})); a.download="moms-health-data.json"; a.click();
+  };
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+      <div style={card}>
+        <h3 style={{ margin:"0 0 6px", fontSize:16, fontWeight:800 }}>Export Health Data</h3>
+        <p style={{ margin:"0 0 22px", fontSize:13, color:C.textM }}>Download data to share with the medical team or for backup.</p>
+        <div style={{ display:"flex", gap:12 }}>
+          <button style={btn("primary")} onClick={exportCSV} disabled={!labResults.length}>📊 Lab Results (CSV)</button>
+          <button style={btn("ghost")} onClick={exportJSON}>📦 All Data (JSON)</button>
+        </div>
+      </div>
+      <div style={card}>
+        <h3 style={{ margin:"0 0 14px", fontSize:14, fontWeight:800 }}>Summary</h3>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14 }}>
+          {[["🔬",labResults.length,"Lab Results"],["💊",medications.length,"Medications"],["📋",notes.length,"Notes"]].map(([ic,n,lb])=>(
+            <div key={lb} style={{ textAlign:"center", padding:18, background:C.sky, borderRadius:12 }}>
+              <div style={{ fontSize:30 }}>{ic}</div><div style={{ fontSize:30, fontWeight:800, marginTop:4 }}>{n}</div><div style={{ fontSize:12, color:C.textM }}>{lb}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── App ────────────────────────────────────────────────────────────────────────
+const NAV=[{key:"dashboard",icon:"🏠",label:"Dashboard"},{key:"summary",icon:"✨",label:"AI Summary"},{key:"labs",icon:"🔬",label:"Lab Results"},{key:"trends",icon:"📈",label:"Trends"},{key:"medications",icon:"💊",label:"Medications"},{key:"notes",icon:"📋",label:"Notes"},{key:"files",icon:"📁",label:"Files"},{key:"export",icon:"📤",label:"Export"}];
+const HDR={dashboard:["Dashboard","Overview & today's summary"],summary:["AI Summary","Current health status in plain language"],labs:["Lab Results","CBC & lab report history"],trends:["Trends","Lab values over time"],medications:["Medications","Current medications and schedule"],notes:["Notes","Doctor visits and observations"],files:["Files","Important documents — NGS, biopsy, imaging"],export:["Export","Download data for sharing or backup"]};
+
+function App() {
+  useEffect(()=>{ const l=document.createElement("link"); l.rel="stylesheet"; l.href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap"; document.head.appendChild(l); return()=>document.head.removeChild(l); },[]);
+
+  const [tab, setTab]         = useState("dashboard");
+  const [labResults, setLR]   = useState([]);
+  const [medications, setMD]  = useState([]);
+  const [notes, setNT]        = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showUpload, setShowUpload] = useState(false);
+  const [isEditor, setIsEditor]     = useState(false);
+  const [hasPinSet, setHasPinSet]   = useState(false);
+  const [showPin, setShowPin]       = useState(false);
+  const [showApiKey, setShowApiKey]  = useState(false);
+
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const [lr,md,nt,pin]=await Promise.all([
+          storage.get("lr",true).catch(()=>null),
+          storage.get("md",true).catch(()=>null),
+          storage.get("nt",true).catch(()=>null),
+          storage.get("editor_pin",true).catch(()=>null),
+        ]);
+
+        if(lr){
+          let results = JSON.parse(lr.value);
+          // Backfill: auto-compute eosinophils_abs = WBC × Eos% / 100
+          // for any result that has both wbc and eosinophils_pct but is missing eosinophils_abs
+          let changed = false;
+          results = results.map(r => {
+            if (r.values &&
+                r.values.wbc !== undefined &&
+                r.values.eosinophils_pct !== undefined &&
+                r.values.eosinophils_abs === undefined) {
+              changed = true;
+              return {
+                ...r,
+                values: {
+                  ...r.values,
+                  eosinophils_abs: Math.round(r.values.wbc * r.values.eosinophils_pct * 100) / 10000
+                }
+              };
+            }
+            return r;
+          });
+          setLR(results);
+          // Persist the backfilled data so it's saved going forward
+          if (changed) await storage.set("lr", JSON.stringify(results), true).catch(()=>{});
+        }
+
+        if(md)setMD(JSON.parse(md.value));
+        if(nt)setNT(JSON.parse(nt.value));
+        if(pin)setHasPinSet(true);
+      } catch(e){}
+      setLoading(false);
+    })();
+  },[]);
+
+  const saveLR = async d=>{ setLR(d);  await storage.set("lr",JSON.stringify(d),true).catch(()=>{}); };
+  const saveMD = async d=>{ setMD(d);  await storage.set("md",JSON.stringify(d),true).catch(()=>{}); };
+  const saveNT = async d=>{ setNT(d);  await storage.set("nt",JSON.stringify(d),true).catch(()=>{}); };
+
+  const [hdr,sub]=HDR[tab]||["",""];
+
+  if(loading) return <div style={{ display:"flex", height:"100vh", alignItems:"center", justifyContent:"center", fontFamily:"'Nunito',sans-serif", background:C.sky }}><div style={{ textAlign:"center" }}><div style={{ fontSize:40 }}>🩺</div><div style={{ fontWeight:800, fontSize:16, marginTop:12 }}>Loading…</div></div></div>;
+
+  return (
+    <div style={{ display:"flex", height:"100vh", fontFamily:"'Nunito',sans-serif", color:C.text, background:C.sky, overflow:"hidden" }}>
+      {/* Sidebar */}
+      <div style={{ width:210, background:C.navy, display:"flex", flexDirection:"column", padding:"22px 0", flexShrink:0 }}>
+        <div style={{ padding:"0 18px 20px", borderBottom:"1px solid rgba(255,255,255,0.1)" }}>
+          <div style={{ fontSize:17, fontWeight:900, color:"#fff", lineHeight:1.2 }}>Mom's Health</div>
+          <div style={{ fontSize:10, color:"rgba(255,255,255,0.45)", marginTop:3, letterSpacing:"0.07em", textTransform:"uppercase" }}>AML · SCT · HES Tracker</div>
+        </div>
+        <nav style={{ marginTop:14, flex:1 }}>
+          {NAV.map(n=>(
+            <div key={n.key} onClick={()=>setTab(n.key)} style={{ display:"flex", alignItems:"center", gap:10, padding:"11px 18px", cursor:"pointer", background:tab===n.key?"rgba(255,255,255,0.13)":"transparent", borderLeft:tab===n.key?`3px solid ${C.accent}`:"3px solid transparent", color:tab===n.key?"#fff":"rgba(255,255,255,0.55)", fontWeight:tab===n.key?800:500, fontSize:14, transition:"all 0.15s" }}>
+              <span style={{ fontSize:15, width:20, textAlign:"center" }}>{n.icon}</span>{n.label}
+            </div>
+          ))}
+        </nav>
+        {/* Lock/Unlock + API key */}
+        <div style={{ padding:"14px 18px", borderTop:"1px solid rgba(255,255,255,0.1)", display:"flex", flexDirection:"column", gap:8 }}>
+          {isEditor?(
+            <div>
+              <div style={{ fontSize:10, color:C.accent, fontWeight:800, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>✏ Editor Mode</div>
+              <button onClick={()=>setIsEditor(false)} style={{ background:"none", border:"1px solid rgba(255,255,255,0.2)", borderRadius:8, color:"rgba(255,255,255,0.5)", fontSize:12, padding:"6px 12px", cursor:"pointer", fontFamily:"'Nunito',sans-serif", width:"100%" }}>🔒 Lock</button>
+            </div>
+          ):(
+            <button onClick={()=>setShowPin(true)} style={{ background:"none", border:"1px solid rgba(255,255,255,0.15)", borderRadius:8, color:"rgba(255,255,255,0.35)", fontSize:12, padding:"6px 12px", cursor:"pointer", fontFamily:"'Nunito',sans-serif", width:"100%", display:"flex", alignItems:"center", gap:6, justifyContent:"center" }}>🔑 Editor Access</button>
+          )}
+          <button onClick={()=>setShowApiKey(true)} style={{ background:"none", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, color:"rgba(255,255,255,0.25)", fontSize:11, padding:"5px 12px", cursor:"pointer", fontFamily:"'Nunito',sans-serif", width:"100%", display:"flex", alignItems:"center", gap:6, justifyContent:"center" }}>⚙ API Key</button>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+        <div style={{ background:C.white, padding:"16px 26px", borderBottom:`1px solid ${C.border}`, display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
+          <div><div style={{ fontSize:20, fontWeight:900 }}>{hdr}</div><div style={{ fontSize:12, color:C.textM, marginTop:1 }}>{sub}</div></div>
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            {!isEditor&&<span style={{ fontSize:11, color:C.textL, background:C.sky, padding:"4px 12px", borderRadius:20, fontWeight:600 }}>👁 View only</span>}
+            {isEditor&&(tab==="dashboard"||tab==="labs"||tab==="summary")&&<button style={{ ...btn("accent"), padding:"10px 20px" }} onClick={()=>setShowUpload(true)}>✨ Upload Lab Report</button>}
+          </div>
+        </div>
+        <div style={{ flex:1, overflow:"auto", padding:24 }}>
+          {tab==="dashboard"   &&<Dashboard   labResults={labResults} medications={medications} notes={notes} onUpload={()=>setShowUpload(true)} isEditor={isEditor}/>}
+          {tab==="summary"     &&<SummaryView labResults={labResults} medications={medications} notes={notes}/>}
+          {tab==="labs"        &&<LabResultsView labResults={labResults} onUpload={()=>setShowUpload(true)} onDelete={id=>saveLR(labResults.filter(r=>r.id!==id))} isEditor={isEditor}/>}
+          {tab==="trends"      &&<TrendsView   labResults={labResults}/>}
+          {tab==="medications" &&<MedicationsView medications={medications} onSave={saveMD} isEditor={isEditor}/>}
+          {tab==="notes"       &&<NotesView    notes={notes} onSave={saveNT} isEditor={isEditor}/>}
+          {tab==="files"       &&<FilesView    isEditor={isEditor}/>}
+          {tab==="export"      &&<ExportView   labResults={labResults} medications={medications} notes={notes}/>}
+        </div>
+      </div>
+
+      {showUpload&&<UploadModal onClose={()=>setShowUpload(false)} onSave={r=>saveLR([...labResults,r])}/>}
+      {showPin&&<PinModal hasPinSet={hasPinSet} onSuccess={()=>{setIsEditor(true);setHasPinSet(true);setShowPin(false);}} onClose={()=>setShowPin(false)}/>}
+      {showApiKey&&<ApiKeyModal onClose={()=>setShowApiKey(false)}/>}
+
+      <style>{`
+        @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        @keyframes loadbar{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}
+        .spin{animation:spin 1.5s linear infinite;display:inline-block}
+        .loading-bar{width:200px;height:4px;background:#d5e9f7;border-radius:2px;overflow:hidden;margin:0 auto}
+        .loading-fill{height:100%;width:60px;background:#2672b8;border-radius:2px;animation:loadbar 1.2s ease-in-out infinite}
+        *{box-sizing:border-box}
+        ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#c5d8ea;border-radius:3px}
+        button:hover{opacity:0.85}button:active{opacity:0.75}
+        textarea,select{font-family:'Nunito',sans-serif}
+      `}</style>
+    </div>
+  );
+}
+
+
+    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+  </script>
+</body>
+</html>
