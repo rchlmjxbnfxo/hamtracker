@@ -26,7 +26,31 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.1.16/Recharts.min.js" crossorigin></script>
+  <!-- Recharts requires these peer deps first -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3-scale/4.0.2/d3-scale.umd.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3-shape/3.2.0/d3-shape.umd.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3-color/3.1.0/d3-color.umd.min.js" crossorigin></script>
+  <!-- Recharts from unpkg with exact known path -->
+  <script>
+    // Load Recharts dynamically to catch load errors
+    (function() {
+      var s = document.createElement("script");
+      s.src = "https://unpkg.com/recharts@2.5.0/umd/Recharts.js";
+      s.crossOrigin = "anonymous";
+      s.onerror = function() {
+        // Fallback: define stub so app loads without charts
+        window.Recharts = {
+          LineChart: function(p){return React.createElement("div",{style:{padding:20,color:"#888",fontSize:12}},"Chart unavailable");},
+          Line: function(){return null;}, XAxis: function(){return null;},
+          YAxis: function(){return null;}, CartesianGrid: function(){return null;},
+          Tooltip: function(){return null;}, Legend: function(){return null;},
+          ResponsiveContainer: function(p){return React.createElement("div",null,p.children);},
+          ReferenceLine: function(){return null;}
+        };
+      };
+      document.head.appendChild(s);
+    })();
+  </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 
   <script>
